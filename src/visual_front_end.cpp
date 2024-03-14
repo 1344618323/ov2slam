@@ -62,6 +62,20 @@ bool VisualFrontEnd::visualTracking(cv::Mat &iml, double time)
 
 
 // Perform tracking in one image, update kps and MP obs, return true if a new KF is req.
+/*
+1. 直方图+建立光流金字塔
+2. 运动模型预估位姿，从而预估3D点在curframe中像素坐标
+3. 3D前后光流 + 2D前后光流 跟踪kpts在curframe中像素坐标。可以配置是从kf到curframe，还是prevframe到curframe，作者推荐后者
+4. 对极几何：输入kf，curframe
+    1. 计算除旋转后的视差，视差小，就不算E了
+    2. 如果是stereo，只用3D ransac求E，求Rt，去outlier
+    3. 如果是mono，用所有kpts ransac求E，求Rt，去outlier；t的尺度用运动模型的
+5. 计算cur_pose
+    1. ransac p3p: 用3D kpts，求Rt，去outlier。这一项可以配置成一直做，也可以配置成被动做。后者触发的条件：3D前后光流good占比太低
+    2. ceres pnp: 用3D kps，求Rt，去outlier
+6. 更新运动模型
+7. 评估是否要生成关键帧：除旋转后的视差大，或者跟踪到的kpts少，就要生成关键帧
+*/
 bool VisualFrontEnd::trackMono(cv::Mat &im, double time)
 {
     if( pslamstate_->debug_ )
@@ -71,6 +85,7 @@ bool VisualFrontEnd::trackMono(cv::Mat &im, double time)
         Profiler::Start("1.FE_Track-Mono");
 
     // Preprocess the new image
+    // 直方图+建立光流金字塔
     preprocessImage(im);
 
     // Create KF if 1st frame processed
@@ -101,6 +116,7 @@ bool VisualFrontEnd::trackMono(cv::Mat &im, double time)
             pslamstate_->breset_req_ = true;
             return false;
         } 
+        // 视差大且跟踪点多，就初始化单目尺度
         else if( checkReadyForInit() ) {
             std::cout << "\n\n - [Visual-Front-End]: Mono Visual SLAM ready for initialization!";
             pslamstate_->bvision_init_ = true;
@@ -128,6 +144,9 @@ bool VisualFrontEnd::trackMono(cv::Mat &im, double time)
 }
 
 
+/*
+更新pcurframe中keypoint的状态
+*/
 // KLT Tracking with motion prior
 void VisualFrontEnd::kltTracking()
 {
@@ -141,12 +160,16 @@ void VisualFrontEnd::kltTracking()
 
     // First we're gonna track 3d kps on only 2 levels
     v3dkpids.reserve(pcurframe_->nb3dkps_);
+    // 3D点在上一帧中的像素坐标
     v3dkps.reserve(pcurframe_->nb3dkps_);
+    // 3D点运动模型预估的像素坐标
     v3dpriors.reserve(pcurframe_->nb3dkps_);
 
     // Then we'll track 2d kps on full pyramid levels
     vkpids.reserve(pcurframe_->nbkps_);
+    // 非3D点在上一帧中的像素坐标
     vkps.reserve(pcurframe_->nbkps_);
+    // 非3D点预估的像素坐标，但没法预估，初始值和vkps一样
     vpriors.reserve(pcurframe_->nbkps_);
 
     vkpis3d.reserve(pcurframe_->nbkps_);
@@ -154,11 +177,13 @@ void VisualFrontEnd::kltTracking()
 
     // Front-End is thread-safe so we can direclty access curframe's kps
     for( const auto &it : pcurframe_->mapkps_ ) 
+    // 遍历上一帧特征点
     {
         auto &kp = it.second;
 
         // Init prior px pos. from motion model
         if( pslamstate_->klt_use_prior_ )
+        // klt_use_prior默认是开的，将3D点重投影到本帧的位姿上（运动模型估计），从而筛选本帧可能看到的3d点
         {
             if( kp.is3d_ ) 
             {
@@ -177,6 +202,7 @@ void VisualFrontEnd::kltTracking()
             }
         }
 
+        // 非3D点也搜集一波
         // For other kps init prior with prev px pos.
         vkpids.push_back(kp.lmid_);
         vkps.push_back(kp.px_);
@@ -186,6 +212,7 @@ void VisualFrontEnd::kltTracking()
     // 1st track 3d kps if using prior
     if( pslamstate_->klt_use_prior_ && !v3dpriors.empty() ) 
     {
+        // 3d点只追踪两层。因为有运动模型的预测，所以误差小，没必要搜太多？
         int nbpyrlvl = 1;
 
         // Good / bad kps vector
@@ -214,6 +241,7 @@ void VisualFrontEnd::kltTracking()
                 nbgood++;
             } else {
                 // If tracking failed, gonna try on full pyramid size
+                // 3d 追踪失败，当成2d重新搜
                 vkpids.push_back(v3dkpids.at(i));
                 vkps.push_back(v3dkps.at(i));
                 vpriors.push_back(v3dpriors.at(i));
@@ -228,6 +256,7 @@ void VisualFrontEnd::kltTracking()
         if( nbgood < 0.33 * nbkps ) {
             // Motion model might be quite wrong, P3P is recommended next
             // and not using any prior
+            // Attention! 如果追踪到的3d点太差，就认为是运动模型预测的pose不行，这时关键点追踪也不确定行不行，会在p3pransac中进一步滤点
             bp3preq_ = true;
             vpriors = vkps;
         }
@@ -260,6 +289,7 @@ void VisualFrontEnd::kltTracking()
                 nbgood++;
             } else {
                 // MapManager is responsible for all the removing operations
+                // 追踪失败的点从 map 中也删除
                 pmap_->removeObsFromCurFrameById(vkpids.at(i));
             }
         }
@@ -353,6 +383,7 @@ void VisualFrontEnd::kltTrackingFromKF()
     // 1st track 3d kps if using prior
     if( pslamstate_->klt_use_prior_ && !v3dpriors.empty() ) 
     {
+        // 3D 只光流2层（为了快？）
         int nbpyrlvl = 1;
 
         // Good / bad kps vector
@@ -443,6 +474,18 @@ void VisualFrontEnd::kltTrackingFromKF()
 
 
 // This function apply a 2d-2d based outliers filtering
+/*
+对比当前帧和最近的kf
+1. 对于stereo且跟踪点足够多的情况：只用3d点来完成 ransac对极几何求Rt去外点；t是没有尺度的，基于运动模型给一个尺度；对于2d跟踪点，在固定Rt后用对极约束去外点。
+    作者认为3d的跟踪会更好。
+2. 其他情况：不管2d还是3d，都用于 ransac对极几何求Rt去外点；t是没有尺度的，基于运动模型给一个尺度；
+
+一个让人担忧的地方是： Rt到底行不行（或者说这个motion model的尺度到底行不行），没关系，这个Rt只是初值，后面还有一步p3p优化这个位姿
+
+有些特殊情况：
+1. 排除旋转后，视差太小，不去outlier了
+2. outlier跟踪点比重过大，可能是 E 发生了退化，不去outlier了
+*/
 void VisualFrontEnd::epipolar2d2dFiltering()
 {
     if( pslamstate_->debug_ || pslamstate_->log_timings_ )
@@ -486,6 +529,9 @@ void VisualFrontEnd::epipolar2d2dFiltering()
     }
 
     // Compute rotation compensated parallax
+    /* 
+    我的理解是：纯旋转也会造成视差，所以这里把旋转的因素排除掉
+    */
     Eigen::Matrix3d Rkfcur = pkf->getRcw() * pcurframe_->getRwc();
 
     // Init bearing vectors and check parallax
@@ -497,6 +543,7 @@ void VisualFrontEnd::epipolar2d2dFiltering()
             }
         }
 
+        // 当前帧像素坐标
         auto &kp = it.second;
 
         // Get the prev. KF related kp if it exists
@@ -556,6 +603,7 @@ void VisualFrontEnd::epipolar2d2dFiltering()
         std::cout << "\n\n";
     }
     
+    // 对极约束，ransac 基于 vkfbvs, vcurbvs，求R,T，与外点
     bool success = 
         MultiViewGeometry::compute5ptEssentialMatrix(
                     vkfbvs, vcurbvs, 
@@ -1149,6 +1197,8 @@ void VisualFrontEnd::preprocessImage(cv::Mat &img_raw)
     // left_raw_img_ = img_raw;
 
     // Update prev img
+    // 如果btrack_keyframetoframe设置为1,那就是从上一关键帧开始追踪，那上一帧就没用了；
+    // 如果btrack_keyframetoframe设置为0，上一帧还有用，用prev_img_来存，作者注释中推荐用这个配置。
     if( !pslamstate_->btrack_keyframetoframe_ ) {
         // cur_img_.copyTo(prev_img_);
         cv::swap(cur_img_, prev_img_);
@@ -1169,6 +1219,7 @@ void VisualFrontEnd::preprocessImage(cv::Mat &img_raw)
             prev_pyr_.swap(cur_pyr_);
         }
 
+        // 如果API里 withDerivatives=true, cur_pyr_.size()=2*(nklt_pyr_lvl+1)
         cv::buildOpticalFlowPyramid(cur_img_, cur_pyr_, pslamstate_->klt_win_size_, pslamstate_->nklt_pyr_lvl_);
     }
 

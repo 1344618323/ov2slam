@@ -29,6 +29,10 @@
 #include "mapper.hpp"
 #include "opencv2/video/tracking.hpp"
 
+/*
+单独开了一个mapper thread
+然后mapper thread又开了两个：estimator_thread, lc_thread
+*/
 Mapper::Mapper(std::shared_ptr<SlamParams> pslamstate, std::shared_ptr<MapManager> pmap, 
             std::shared_ptr<Frame> pframe)
     : pslamstate_(pslamstate), pmap_(pmap), pcurframe_(pframe)
@@ -117,6 +121,7 @@ void Mapper::run()
 
                 std::lock_guard<std::mutex> lock(pmap_->map_mutex_);
                 
+                // 时间三角化： 单目只能用这个三角化；对于双目而言，也有用，有些2d kpts 可能没有从 右目中 找到匹配点
                 triangulateTemporal(*pnewkf);
                 
                 if( pslamstate_->debug_ ) {
@@ -152,6 +157,8 @@ void Mapper::run()
 
             if( pslamstate_->use_brief_ && kf.kfid_ > 0 
                 && !bnewkfavailable_ ) 
+            // bnewkfavailable 如果还有其他可用的新关键帧，就是true；否则是false。可见，为了减少耗时，
+            // 当有很多新关键帧累积时，就不进这个条件了
             {
                 if( pslamstate_->bdo_track_localmap_ )
                 {
@@ -188,6 +195,11 @@ void Mapper::run()
 }
 
 
+/*
+输入frame，找到frame中2d kpts
+for kpt in kpts:
+    找到每个kpt 第一次被观测到的 kf，三角化
+*/
 void Mapper::triangulateTemporal(Frame &frame)
 {
     if( pslamstate_->debug_ || pslamstate_->log_timings_ )
@@ -343,6 +355,10 @@ void Mapper::triangulateTemporal(Frame &frame)
         Profiler::StopAndDisplay(pslamstate_->debug_, "1.KF_TriangulateTemporal");
 }
 
+/*
+输入frame中有了stereo kp, 三角化这些stereo kp (注意，如果kp已经是3d的了，就不要三角化了)
+并将这些新3D点添加到mapManager中
+*/
 void Mapper::triangulateStereo(Frame &frame)
 {
     if( pslamstate_->debug_ || pslamstate_->log_timings_ )
@@ -466,6 +482,16 @@ inline Eigen::Vector3d Mapper::computeTriangulation(const Sophus::SE3d &T, const
     return MultiViewGeometry::triangulate(T, bvl, bvr);
 }
 
+/*
+这是retracking的操作，也可以看做是一个初级的回环检测
+motivation：有些特征点可能在追踪过程中跟丢了，但frame中检测成了另一个特征点
+
+找出frame共视帧中有，但在frame中没有跟踪到的3D点，这些点我们成为p1，怎么实现这个point 2 point的搜索呢？
+1. 像素坐标差不多：p1投影到frame中附近要有对应的特征点p2，另外p2还有其他共视帧，p1投影到这些关键帧，像素坐标也应该差不多（默认只能差两个像素）
+2. desc差不多：p1和p2 desc 距离要小
+
+Mapper::mergeMatches要做的事：最终要把 p2的数据 换成 p1
+*/
 bool Mapper::matchingToLocalMap(Frame &frame)
 {
     if( pslamstate_->debug_ || pslamstate_->log_timings_ )
@@ -478,6 +504,11 @@ bool Mapper::matchingToLocalMap(Frame &frame)
     // and add it to the set of MPs to search for
     auto cov_map = frame.getCovisibleKfMap();
 
+    /*
+    这个if语句的作用：
+    frame.set_local_mapids 用于存储 frame共视帧拥有的3d点，但自己没有的kpt。但如果数量不够，就往前遍历关键帧的set_local_mapids，并添加到
+    frame.set_local_mapids中，直到数量足够
+    */
     if( frame.set_local_mapids_.size() < nmax_localplms ) 
     {
         int kfid = cov_map.begin()->first;
@@ -601,9 +632,24 @@ std::map<int,int> Mapper::matchToMap(const Frame &frame, const float fmaxprojerr
         dmaxpxdist *= 2.;
     }
 
+    // map [frame mpt.id] -> vector{ {localmap pt.id, 两个pt的desc汉明距离} }
     std::map<int, std::vector<std::pair<int, float>>> map_kpids_vlmidsdist;
 
     // Go through all MP from the local map
+    /*
+    遍历这些共视帧能看到，而frame看不到3D特征点，就叫plms：
+        如果plm不再frame视角内
+            continue
+        将这些特征点投影到frame中，可以得到投影点周围的 nearkps
+        遍历 nearkps：
+            找出 nearkp 对应的地图点pkplm，并找出能观测到pkplm的帧pcokf、以及pkplm在pcokf上的坐标cokp
+            mean(proj(pcokf, plm),cokp) 太大，就continue
+            计算 pkplm 和 plm 描述子汉明距离： 每个mappoint都有一堆描述子，找出差最小的那个汉明距离
+        比较这些nearkps与plm的行明距离，找其中最小的，写入 map_kpids_vlmidsdist；
+    
+    看map_kpids_vlmidsdist，可以发现可能很多 plm 会对应到一个 frame.kp上。只要和frame.kp最近的那个plm
+    输出 {frame kpt.id, plm.id}
+    */
     for( const int lmid : set_local_lmids )
     {
         if( bnewkfavailable_ ) {
@@ -733,6 +779,7 @@ std::map<int,int> Mapper::matchToMap(const Frame &frame, const float fmaxprojerr
         }
 
         if( bestid != -1 && secid != -1 ) {
+            // 最近距离和次近距离要差得多些
             if( 0.9 * secdist < bestdist ) {
                 bestid = -1;
             }

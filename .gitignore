@@ -1,0 +1,7 @@
+.vscode
+Thirdparty/Sophus/build/
+Thirdparty/Sophus/install/
+Thirdparty/ceres-solver/build/
+Thirdparty/ceres-solver/install/
+Thirdparty/ibow_lcd/build/
+Thirdparty/obindex2/build/

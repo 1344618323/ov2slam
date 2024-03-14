@@ -48,9 +48,20 @@ void MapManager::createKeyframe(const cv::Mat &im, const cv::Mat &imraw)
 
     // Prepare Frame to become a KF
     // (Update observations between MPs / KFs)
+    /*
+    keypoint和mappoint通过lmid关联的
+    1. 在之前的步骤中 pcurframe 追踪到了一些从前的keypoints，但pcurframe保存的keypoint可能过多，
+    需要删除一些。从pcurframe删除keypoint后，要将对应mappoint 设置成不再被观测到
+    2. 对于pcurframe保留下的keypoint，要更新对应mappoint内的关键帧set
+    */
     prepareFrame();
 
     // Detect in im and describe in imraw
+    /*
+    从均衡化的图像（im）中提取新的keypoint，并在均衡化前的图像（imraw）中提取描述符、像素值
+    将新keypoint加入pcurframe
+    将新keypoint加入mappoint内的kfs set
+    */
     extractKeypoints(im, imraw);
 
     // Add KF to the map
@@ -76,6 +87,7 @@ void MapManager::prepareFrame()
             if( vkpids.size() > 2 ) {
                 int lmid2remove = -1;
                 size_t minnbobs = std::numeric_limits<size_t>::max();
+                // 如果cell中kps的数量超过2个，就从pcurframe中删除被观测的最少的那个kp
                 for( const auto &lmid : vkpids ) {
                     auto plmit = map_plms_.find(lmid);
                     if( plmit != map_plms_.end() ) {
@@ -114,12 +126,16 @@ void MapManager::prepareFrame()
         Profiler::StopAndDisplay(pslamstate_->debug_, "2.FE_CF_prepareFrame");
 }
 
+/*
+建立关键帧之间的共视关系
+*/
 void MapManager::updateFrameCovisibility(Frame &frame)
 {
     if( pslamstate_->debug_ || pslamstate_->log_timings_ )
         Profiler::Start("1.KF_updateFrameCovisilbity");
 
     // Update the MPs and the covisilbe graph between KFs
+    // map[kfid]=num of cov kpts
     std::map<int,int> map_covkfs;
     std::unordered_set<int> set_local_mapids;
 
@@ -364,6 +380,17 @@ void MapManager::describeKeypoints(const cv::Mat &im, const std::vector<Keypoint
 
 // This function is responsible for performing stereo matching operations
 // for the means of triangulation
+/*
+基本思想是用左目到右目的光流，来找到双目匹配的特征点，和traking中一样是：
+     3d金字塔少层+2d金字塔多层，若3d搜不到fallback到2d，光流为前后光流
+    
+重点在于初值的选择，用了不少trick
+1. 如果本身点就是3d的，直接投影即可
+2. 如果做了stereo rectify, SAD
+3. 如果点附件有3d点，就加权求个pt3d，再投影到右目
+
+光流追踪后，要关注 左右目对应kp 的辛普森距离不能太大，只有小的才能由于建立stereo pt
+*/
 void MapManager::stereoMatching(Frame &frame, const std::vector<cv::Mat> &vleftpyr, const std::vector<cv::Mat> &vrightpyr) 
 {
     if( pslamstate_->debug_ || pslamstate_->log_timings_ )
@@ -380,6 +407,31 @@ void MapManager::stereoMatching(Frame &frame, const std::vector<cv::Mat> &vleftp
     float uppyrcoef = std::pow(2,pslamstate_->nklt_pyr_lvl_);
     float downpyrcoef = 1. / uppyrcoef;
     
+    /*
+    为了看代码方便，写下这些个变量的意思吧
+    vleftkps： input frame关键点
+    
+    遍历 vleftkps：
+        if kp 是3d点：
+            直接投影到右目即可, 更新v3dkpids，v3dkps,v3dpriors
+        else if kp 是2d点：
+            if stereo rectify:
+                平行极线SAD搜索，更新vkpids, vkps, vpriors
+            else: 
+                若kp附件有3d kp:
+                    用附近这些3d kp算出一个加权 z，从而更新v3dkpids，v3dkps,v3dpriors（对！是3d的！）
+            
+            剩余2d点没有就没有预测了（vpriors的坐标==vkps的左边），更新 vkpids, vkps, vpriors
+            
+
+    v3dkpids，v3dkps: vleftkps中3d点的id和左目pt
+    v3dpriors： vleftkps中3d点 在右目中的投影
+    
+    vkpids, vkps： vleftkps中2d点的id和左目pt
+    vpriors vleftkps中2d点 在右目中的投影
+
+    voutkpids, vpriorids： 没用到的变量
+    */
     std::vector<int> v3dkpids, vkpids, voutkpids, vpriorids;
     std::vector<cv::Point2f> v3dkps, v3dpriors, vkps, vpriors;
 
@@ -426,6 +478,7 @@ void MapManager::stereoMatching(Frame &frame, const std::vector<cv::Mat> &vleftp
 
             cv::Point2f pyrleftpt = kp.px_ * downpyrcoef;
 
+            // stereo rectify后直接横移搜索即可
             ptracker_->getLineMinSAD(vleftpyr.at(nmaxpyrlvl), vrightpyr.at(nmaxpyrlvl), pyrleftpt, winsize, xprior, l1err, true);
 
             xprior *= uppyrcoef;
@@ -441,6 +494,7 @@ void MapManager::stereoMatching(Frame &frame, const std::vector<cv::Mat> &vleftp
             auto vnearkps = frame.getSurroundingKeypoints(kp);
             if( vnearkps.size() >= nbmin3dcokps ) 
             {
+                // 2d kp 可能是存在3d kp的
                 std::vector<Keypoint> vnear3dkps;
                 vnear3dkps.reserve(vnearkps.size());
                 for( const auto &cokp : vnearkps ) {
@@ -728,6 +782,7 @@ void MapManager::updateMapPoint(const int lmid, const Eigen::Vector3d &wpt, cons
     }
 
     // If MP 2D -> 3D => Notif. KFs 
+    // 观测到该mappoint的keyframe和curframe需要把 frame::keypoints 中对应的对象的is3d_改成true
     if( !plmit->second->is3d_ ) {
         for( const auto &kfid : plmit->second->getKfObsSet() ) {
             auto pkfit = map_pkfs_.find(kfid);
@@ -743,6 +798,7 @@ void MapManager::updateMapPoint(const int lmid, const Eigen::Vector3d &wpt, cons
     }
 
     // Update MP world pos.
+    // 给mapPoint的赋3D坐标值
     if( kfanch_invdepth >= 0. ) {
         plmit->second->setPoint(wpt, kfanch_invdepth);
     } else {
@@ -1032,6 +1088,7 @@ void MapManager::removeObsFromCurFrameById(const int lmid)
     // Skip if MP does not exist
     if( plmit == map_plms_.end() ) {
         // Set the MP at origin
+        // 不懂这是要干嘛？
         pcloud_->points.at(lmid) = colored_pt;
         return;
     }

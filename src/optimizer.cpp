@@ -88,6 +88,8 @@ void Optimizer::localBA(Frame &newframe, const bool buse_robust_cost)
             std::pair<int,int>
     >>> 
         vreprojerr_kfid_lmid, vright_reprojerr_kfid_lmid, vanchright_reprojerr_kfid_lmid;
+    // vector< {costfuntion, {resid, {kfid, lmid} } }>
+    // 分别是：kf与lm左目残差， kf与lm右目残差，anchorkf与lm右目残差
 
     // Add the left cam calib parameters
     auto pcalibleft = newframe.pcalib_leftcam_;
@@ -126,6 +128,7 @@ void Optimizer::localBA(Frame &newframe, const bool buse_robust_cost)
     }
 
     // Get the new KF covisible KFs
+    // newframe 共视帧id -> newframe与该共视帧 共视点的数量
     std::map<int,int> map_covkfs = newframe.getCovisibleKfMap();
 
     // Add the new KF to the map with max score
@@ -134,8 +137,11 @@ void Optimizer::localBA(Frame &newframe, const bool buse_robust_cost)
     // Keep track of MPs no suited for BA for speed-up
     std::unordered_set<int> set_badlmids;
 
+    // 参与优化的lm id
     std::unordered_set<int> set_lmids2opt;
+    // 参与优化的kf id
     std::unordered_set<int> set_kfids2opt;
+    // const的kf id
     std::unordered_set<int> set_cstkfids;
 
     if( pslamstate_->debug_ )
@@ -145,6 +151,8 @@ void Optimizer::localBA(Frame &newframe, const bool buse_robust_cost)
     bool all_cst = false;
 
     // Go through the covisibility Kf map
+    // 从后往前遍历共视帧，与输入帧有25个以上的共视帧为优化帧，再往前就是固定帧了
+    // 优化帧的lm作为要优化的lm
     int nmaxkfid = map_covkfs.rbegin()->first;
 
     for( auto it = map_covkfs.rbegin() ; it != map_covkfs.rend() ; it++ ) {
@@ -212,6 +220,7 @@ void Optimizer::localBA(Frame &newframe, const bool buse_robust_cost)
             ordering->AddElementToGroup(map_id_pointspar_.at(lmid).values(), 0);
         }
 
+        // 记录第一个观察到该lm的帧的信息（注意这一帧，既可能是优化帧，也可能是固定帧）
         int kfanchid = -1;
         double unanch_u = -1.;
         double unanch_v = -1.;
@@ -226,6 +235,7 @@ void Optimizer::localBA(Frame &newframe, const bool buse_robust_cost)
             std::shared_ptr<Frame> pkf = nullptr;
 
             // Add the observing KF if not set yet
+            // 应该是多线程的缘故
             if( pkfit == map_local_pkfs.end() ) 
             {
                 pkf = pmap_->getKeyframe(kfid);
@@ -268,6 +278,7 @@ void Optimizer::localBA(Frame &newframe, const bool buse_robust_cost)
 
                     if( kp.is_stereo_ ) 
                     {
+                        // 使用逆深度参数化lm时，lm与其anchor帧左目是不会有重投影误差的，但与右目有重投影误差
                         ceres::CostFunction *f = new DirectLeftSE3::ReprojectionErrorRightAnchCamKSE3AnchInvDepth(
                                 kp.runpx_.x, kp.runpx_.y, unanch_u, unanch_v, 
                                 std::pow(2.,kp.scale_)

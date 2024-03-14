@@ -41,6 +41,34 @@
 #include <opencv2/calib3d.hpp>
 #include <opencv2/imgproc.hpp>
 
+/*
+这个类很通用！
+用户在读配置时有多种选择：
+1. 既不undistort，也不rectify，调用函数
+    CameraCalibration
+    setupExtrinsic
+    记录最原始的内参、畸变、外参
+2. undistort，不rectify，调用函数
+    CameraCalibration
+    setUndistMap (这一步会调用cv::getOptimalNewCameraMatrix)
+    setupExtrinsic
+    此时，类成员内参`K_`变成了优化后的内参，类成员`D_`为0；外参还是原始的
+3.  rectify，调用函数
+    CameraCalibration
+    cv::stereoRectify
+    setUndistStereoMap
+    此时，类成员内参`K_`变成了优化后的内参，类成员`D_`为0；外参R=I,t只有x有值
+
+配置完后，对于有undistort/rectify，务必要调用 rectifyImage 来调整源图像，再作其他操作
+
+----------
+
+setROIMask 用于设置有效像素的区域，结果来自cv::stereoRectify or cv::getOptimalNewCameraMatrix
+
+----------
+projectCamToImageDist，projectCamToImageUndist：对于配置undistort/rectify的情况，没有区别；但对于没配置的，有区别
+projectCamToImage，undistortImagePoint 同理
+*/
 class CameraCalibration {
 
 public:
@@ -72,10 +100,12 @@ public:
     cv::Point2f projectCamToImage(const Eigen::Vector3d &pt) const;
     cv::Point2f undistortImagePoint(const cv::Point2f &pt) const;
 
+    // 如果配置的是rectify，返回的是rectify后的外参
     Eigen::Matrix3d getRotation() const;
     Eigen::Vector3d getTranslation() const;
     Sophus::SE3d getExtrinsic() const;
 
+    // 这哥三还没被用到
     void updateExtrinsic(const Sophus::SE3d &Tc0ci);
     void updateIntrinsic(const double fx, const double fy, const double cx, const double cy);
     void updateDistCoefs(const double k1, const double k2=0., const double p1=0., const double p2=0.);

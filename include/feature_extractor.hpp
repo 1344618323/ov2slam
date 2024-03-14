@@ -28,6 +28,11 @@
 
 #include "frame.hpp"
 
+/*
+给定im、roi、curkps, 在除curkps位置外，提取新特征点并返回。
+看配置，作者在fast时更倾向于 gridFast; 在average和accurate时，更倾向于singleScale
+另外这些特征点在被提取出来后，还进行了亚像素定位，以期更高的精度
+*/
 class FeatureExtractor {
 
 public:
@@ -47,6 +52,12 @@ public:
 
     void setMask(const cv::Mat &im, const std::vector<cv::Point2f> &vpts,  const int dist, cv::Mat &mask) const;
 
+    /*
+    构造函数设置的参数
+    一张图像按 maxdist 分成 r*c 个cell， maxpts = r*c, mindist  = 0.5* maxdist
+    maxquality 用于gftt、singleScale的阈值, minquality=0.5*maxquality
+    fast_th 用于fast的阈值
+    */
     size_t nmaxpts_, nmaxdist_, nmindist_;
     double dmaxquality_, dminquality_;
     int nfast_th_;

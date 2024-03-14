@@ -27,6 +27,9 @@
 #include "camera_calibration.hpp"
 
 
+/*
+对于单目，就是加载单目的内参、畸变参数
+*/
 CameraCalibration::CameraCalibration(const std::string &model, double fx, double fy, double cx, double cy,
                         double k1, double k2, double p1, double p2, double img_w, double img_h)
     : fx_(fx), fy_(fy), cx_(cx), cy_(cy), k1_(k1), k2_(k2), p1_(p1), p2_(p2)
@@ -88,6 +91,17 @@ void CameraCalibration::setUndistMap(const double alpha)
     // CV_16SC2 = 11 / CV_32FC1 = 5
     if( model_ == Pinhole )
     {
+        /*
+        看opencv文档，似乎是默认内参矩阵只有四个有效参数fx fy cx cy，其余是0（这个存疑？不过应该是）
+
+        主要是alpha这个参数，看opencv文档： Free scaling parameter between 0 (when all the pixels in the undistorted 
+        image are valid) and 1 (when all the source image pixels are retained in the undistorted image).
+        0时意味着用新内参矩阵，获得的图像上的像素都是valid（相当于裁剪了一部分源图像素）； 而1意味着原图的所有像素都会保留，但图形中会有一些黑像素
+
+        roi_rect_ 用于写入一个Rect，里面包含了all valid的像素（也就是说如果是alpha=0，那roi_rect_应该和图像一样大？这个有空去尝试尝试吧）
+
+        根据新内参矩阵，计算投影map(undistort_u, undistort_v)-> distort u 和 map(undistort_u, undistort_v)-> distort v
+        */ 
         newK = cv::getOptimalNewCameraMatrix(Kcv_, Dcv_, img_size, alpha, img_size, &roi_rect_);
         cv::initUndistortRectifyMap(Kcv_, Dcv_, cv::Mat(), newK, img_size, CV_32FC1, undist_map_x_, undist_map_y_);
     }
@@ -101,6 +115,7 @@ void CameraCalibration::setUndistMap(const double alpha)
         exit(-1);
     }
 
+    // 去畸变后，得到了新内参矩阵，且畸变参数为0
     newK.copyTo(Kcv_);
 
     cv::cv2eigen(Kcv_, K_);
@@ -131,6 +146,23 @@ void CameraCalibration::setUndistMap(const double alpha)
 }
 
 
+/*
+R,P是cv::stereoRectify的结果
+P是新内参
+对于左目而言：
+f 0 cx 0
+0 f cy 0
+0 0  1 0
+
+对！为了测距 fx=fy!
+
+对于右目而言：
+f 0 cx t_{rl}f
+0 f cy 0
+0 0  1 0
+
+双目矫正后 R_{rl} = I，只有t_{rl}有值
+*/
 void CameraCalibration::setUndistStereoMap(const cv::Mat &R, const cv::Mat &P, const cv::Rect &roi) 
 {
     std::cout << "\n\nComputing the stereo rectification mapping!\n";
@@ -170,11 +202,13 @@ void CameraCalibration::setUndistStereoMap(const cv::Mat &R, const cv::Mat &P, c
     icx_ = iK_(0,2);
     icy_ = iK_(1,2);
 
+    // T_{lr}
     Tc0ci_ = Sophus::SE3d();
     Tc0ci_.translation() = Eigen::Vector3d(-1. * Pe(0,3) / fx_,
                                            -1. * Pe(1,3) / fx_,
                                            -1. * Pe(2,3) / fx_);
 
+    // T_{rl}
     Tcic0_ = Tc0ci_.inverse();
 
     cv::eigen2cv(Tc0ci_.rotationMatrix(), Rcv_c0ci_);

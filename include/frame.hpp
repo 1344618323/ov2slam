@@ -46,21 +46,32 @@
 struct Keypoint {
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
+    // 特征点id
     int lmid_;
 
+    // 像素坐标
     cv::Point2f px_;
+    // 去畸变像素坐标
     cv::Point2f unpx_;
+    // 归一化平面坐标
     Eigen::Vector3d bv_;
 
+    // 
     int scale_;
     float angle_;
+    // 特征点描述子
     cv::Mat desc_;
     
+    // 对应的地图点是否是3D点
     bool is3d_;
 
+    // 是立体特征点（左右图匹配上）
     bool is_stereo_;
+    // 右图的像素坐标
     cv::Point2f rpx_;
+    // 右图的去畸变像素坐标
     cv::Point2f runpx_;
+    // 右图的归一化坐标
     Eigen::Vector3d rbv_;
 
     bool is_retracked_;
@@ -199,14 +210,24 @@ public:
     double img_time_;
 
     // Hash Map of observed keypoints
+    // 存储特征点
     std::unordered_map<int, Keypoint> mapkps_;
 
     // Grid of kps sorted by cell numbers and scale
     // (We use const pointer to reference the keypoints in vkps_
     // HENCE we should only use the grid to read kps)
+    /*
+    ncellsize_由于配置文件决定，如45像素
+    nbhcells_ = 图像长度/ncellsize_
+    nbwcells_ = 图像宽度/ncellsize_
+    ngridcells_ = nbhcells_* nbwcells_
+    vgridkps_的外围长度是ngridcells_，内围是每个cell存的keypt id
+    noccupcells_ 表示存有 id 的cell
+    */
     std::vector<std::vector<int>> vgridkps_;
     size_t ngridcells_, noccupcells_, ncellsize_, nbwcells_, nbhcells_;
 
+    // nb2dkps+n3dkps = nbkps
     size_t nbkps_, nb2dkps_, nb3dkps_, nb_stereo_kps_;
 
     // Pose (T cam -> world), (T world -> cam)
@@ -226,9 +247,11 @@ public:
     cv::Mat Fcv_;
 
     // Covisible kf ids
+    // map[关键帧id] = 当前frame 和这个关键帧 共视的kp的数量
     std::map<int,int> map_covkfs_;
 
     // Local MapPoint ids
+    // 是共视帧的3D点，但不是当前帧的特征点
     std::unordered_set<int> set_local_mapids_;
 
     // Mutex

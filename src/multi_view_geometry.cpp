@@ -489,6 +489,10 @@ bool MultiViewGeometry::ceresPnP(
     return ceresPnP(vunkps, vwpts, vscales, Twc, nmaxiter, chi2th, buse_robust, bapply_l2_after_robust, fx, fy, cx, cy, voutliersidx);
 }
 
+/*
+固定3d点，求位姿，找出3d点中的outlier，
+如果bapply_l2_after_robust设置为true，求在抛去outlier后重新优化，bapply_l2_after_robust默认是true
+*/
 bool MultiViewGeometry::ceresPnP(
     const std::vector<Eigen::Vector2d, Eigen::aligned_allocator<Eigen::Vector2d> > &vunkps,
     const std::vector<Eigen::Vector3d, Eigen::aligned_allocator<Eigen::Vector3d> > &vwpts,

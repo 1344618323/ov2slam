@@ -30,6 +30,11 @@
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
 
+/*
+Forward-Backward  KLT Tracking
+输入：前、后帧图像金字塔，前、后特征点像素坐标，
+输出：追踪结果
+*/
 class FeatureTracker {
 
 public:

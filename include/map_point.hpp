@@ -87,7 +87,9 @@ public:
 
     // Mean desc and list of descs
     cv::Mat desc_;
+    // kfid -> desc
     std::unordered_map<int, cv::Mat> map_kf_desc_;
+    // kfid -> desc_dist
     std::unordered_map<int, float> map_desc_dist_;
 
     // For vizu

@@ -37,7 +37,22 @@
 #include "feature_extractor.hpp"
 #include "feature_tracker.hpp"
 
+/*
+负责生成关键帧和关键点
+*/
 
+/*
+mapmanager类管理着mapoint
+frame类管理着keypoint
+
+keypoint和mappoint通过mapmanager->lmid关联着
+
+可以看到
+addKeypointsToFrame：
+    frame.addKeypoint(...);
+    addMapPoint(...);
+    是同步调用的
+*/
 class MapManager {
 
 public:
@@ -108,16 +123,21 @@ public:
 
     void reset();
     
+    // keypoint/mappoint id， keyframe id
     int nlmid_, nkfid_;
+    // 维护中的 keypoint/mappoint num, keyframe num
     int nblms_, nbkfs_;
 
     std::shared_ptr<SlamParams> pslamstate_;
     std::shared_ptr<FeatureExtractor> pfeatextract_;
     std::shared_ptr<FeatureTracker> ptracker_;
 
+    // SlamManager中创建的对象（只构建一次，但对象中的数据会不断更新），通过这个指针制定
     std::shared_ptr<Frame> pcurframe_;
 
+    // 关键帧集合：每次添加关键帧时，就会拷贝一份pcurframe
     std::unordered_map<int, std::shared_ptr<Frame>> map_pkfs_;
+    // 地图点集合
     std::unordered_map<int, std::shared_ptr<MapPoint>> map_plms_;
 
     pcl::PointCloud<pcl::PointXYZRGB>::Ptr pcloud_;

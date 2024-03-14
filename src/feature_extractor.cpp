@@ -356,6 +356,7 @@ std::vector<cv::Point2f> FeatureExtractor::detectSingleScale(const cv::Mat &im, 
             double dminval, dmaxval;
             cv::Point minpx, maxpx;
 
+            // 找到输入矩阵的 最小值、最大值、最小值像素坐标、最大值像素坐标
             cv::minMaxLoc(hmap.mul(mask(hroi)), &dminval, &dmaxval, &minpx, &maxpx);
             maxpx.x += x;
             maxpx.y += y;
@@ -372,6 +373,7 @@ std::vector<cv::Point2f> FeatureExtractor::detectSingleScale(const cv::Mat &im, 
                 cv::circle(mask, maxpx, nhalfcell, cv::Scalar(0.), -1);
             }
 
+            // 如果满足要求，一个cell里可以找到两个角点
             cv::minMaxLoc(hmap.mul(mask(hroi)), &dminval, &dmaxval, &minpx, &maxpx);
             maxpx.x += x;
             maxpx.y += y;
@@ -518,6 +520,9 @@ std::vector<cv::Point2f> FeatureExtractor::detectGridFAST(const cv::Mat &im, con
                 std::sort(vkps.begin(), vkps.end(), compare_response);
             }
 
+            /*
+            让我很好奇的是，这个response是怎么算的？请参考：https://stackoverflow.com/questions/67306891/algorithm-behind-score-calculation-in-fast-corner-detector
+            */
             if( vkps.at(0).response >= 20 ) {
                 cv::Point2f pxpt = vkps.at(0).pt;
                 
@@ -526,6 +531,7 @@ std::vector<cv::Point2f> FeatureExtractor::detectGridFAST(const cv::Mat &im, con
 
                 cv::circle(mask, pxpt, nhalfcell, cv::Scalar(0), -1);
 
+                // 只挑了响应最大的那个
                 vvdetectedpx.at(i).push_back(pxpt);
             }
 
@@ -561,6 +567,7 @@ std::vector<cv::Point2f> FeatureExtractor::detectGridFAST(const cv::Mat &im, con
         cv::TermCriteria criteria = cv::TermCriteria(cv::TermCriteria::EPS + 
                                         cv::TermCriteria::MAX_ITER, 30, 0.01);
 
+        // 角点亚像素是怎么算的？https://docs.opencv.org/4.x/dd/d1a/group__imgproc__feature.html#ga354e0d7c86d0d9da75de9b9701a9a87e
         cv::cornerSubPix(im, vdetectedpx, winSize, zeroZone, criteria);
     }
 
@@ -582,3 +589,35 @@ void FeatureExtractor::setMask(const cv::Mat &im, const std::vector<cv::Point2f>
         cv::circle(mask, pt, dist, 0, -1);
     }
 }
+
+/*
+关于 角点 的阶段性学习
+
+1. fast feature
+
+FastFeatureDetector中可以发现要设置参数 threshold(默认为10), type(默认为TYPE_9_16)
+对于像素（像素值为I），若周围一圈的16个像素，有连续9个大于I+threshold，或者小于I-threshold，则认为这个像素是角点
+那么这个角点的response咋算的呢？
+统计连续的9个像素-中心像素 (I'-I)，中的最小值。一个能得到16个最小值，取其中最大的作为response
+
+2. 亚像素怎么算呢？
+在之前的步骤中得到一个角点，其像素坐标是一个整数，我们希望能将其精确成一个浮点数，设这个浮点坐标为q（其整数坐标为q'）
+
+q'在一个 (2*win+1, 2*win+1) 的patch中心，设这个patch中任一个像素坐标为p_i, 其梯度为 d_i (是一个二维向量)
+
+我们认为 (q-p_i)^T d_i = 0
+可以堆出 (2*win+1)*(2*win+1)个等式，得到一个超定方程，求解q即可
+
+3. 基于OpenCV cornerMinEigenVal的角点搜索方法
+cv::cornerMinEigenVal内会调用cv::cornerEigenValsAndVecs()的结果
+
+cv::cornerEigenValsAndVecs()：https://docs.opencv.org/4.x/dd/d1a/group__imgproc__feature.html#ga4055896d9ef77dd3cacf2c5f60e13f1c
+对任一像素，在一个block*block的像素块内，每个像素都可计算梯度（2维），这些梯度可以得到一个协方差矩阵，对这个矩阵作对角化，可以得到特征值（2个）、特征向量（2个）
+
+cv::cornerMinEigenVal(src,dst)取小的那个特征值，设src size为w*h，dst size 也是w*h, 每个像素值为那个小特征值
+
+那么像素的小特征值意味着什么呢？ 
+1. 设想一个像素 如果值与周围一样，那么梯度为(0,0),特征值也为(0,0)
+2. 设想一个像素 是边线，那么特征值为(0,x)
+3. 角点才能得到两个非0的特征值！
+*/

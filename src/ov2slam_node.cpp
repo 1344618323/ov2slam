@@ -48,6 +48,11 @@
 #include "slam_params.hpp"
 
 
+/*
+easy file:
+1. 启用两个sub，用于接收左右目img
+2. 启用一条线程：找到同步的左右img，喂给slam系统
+*/
 class SensorsGrabber {
 
 public:
@@ -110,6 +115,7 @@ public:
                         img1_buf.pop();
                         std::cout << "\n Throw img1 -- Sync error : " << (time0 - time1) << "\n";
                     }
+                    // time0 和 time1 差值在0.015以内才处理，且以左目时间戳为基准
                     else
                     {
                         image0 = getGrayImageFromMsg(img0_buf.front());

@@ -82,6 +82,8 @@ SlamManager::SlamManager(std::shared_ptr<SlamParams> pstate, std::shared_ptr<Ros
 
     // Create all objects to be used within OV²SLAM
     // =============================================
+    // CLAHE是一种直方图均衡化的变体，它可以在图像的不同区域应用不同的对比度增强，以更好地保留细节并防止过度增强噪声
+    // clahe_tiles是网格划分大小，在不同的区域应用不同的对比度增强
     int tilesize = 50;
     cv::Size clahe_tiles(pcalib_model_left_->img_w_ / tilesize
                         , pcalib_model_left_->img_h_ / tilesize);
@@ -288,6 +290,7 @@ bool SlamManager::getNewImage(cv::Mat &iml, cv::Mat &imr, double &time)
             qimg_right_.pop();
         }
 
+        // 为了实时，仅仅处理最后一帧
         if( !pslamstate_->bforce_realtime_ )
             break;
 

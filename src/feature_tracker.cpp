@@ -48,6 +48,8 @@ void FeatureTracker::fbKltTracking(const std::vector<cv::Mat> &vprevpyr, const s
     cv::Size klt_win_size(nwinsize, nwinsize);
 
     if( (int)vprevpyr.size() < 2*(nbpyrlvl+1) ) {
+        // 确保 图像金字塔 == 函数输入的金字塔大小
+        // 图像金字塔size()=（金字塔层数+1）*2
         nbpyrlvl = vprevpyr.size() / 2 - 1;
     }
 
@@ -110,6 +112,7 @@ void FeatureTracker::fbKltTracking(const std::vector<cv::Mat> &vprevpyr, const s
     // std::cout << "\n \t >>> Forward kltTracking : #" << nbgood << " out of #" << nbkps << " \n";
 
     // Tracking Backward
+    // backward 就不用金字塔了
     cv::calcOpticalFlowPyrLK(vcurpyr, vprevpyr, vnewkps, vbackkps, 
                 vstatus, verr, klt_win_size,  0, klt_convg_crit_,
                 (cv::OPTFLOW_USE_INITIAL_FLOW + cv::OPTFLOW_LK_GET_MIN_EIGENVALS) 
@@ -137,6 +140,11 @@ void FeatureTracker::fbKltTracking(const std::vector<cv::Mat> &vprevpyr, const s
 }
 
 
+/*
+SAD:
+pt的patch 横移， 找到 在另一帧图像上 SAD 最小的 patch， 结果输入到 xprior
+处于精度考虑，pt是浮点形的，而这个patch也是getRectSubPix得到，其内像素值也是插值得到
+*/
 void FeatureTracker::getLineMinSAD(const cv::Mat &iml, const cv::Mat &imr, 
     const cv::Point2f &pt,  const int nwinsize, float &xprior, 
     float &l1err, bool bgoleft) const
@@ -174,6 +182,9 @@ void FeatureTracker::getLineMinSAD(const cv::Mat &iml, const cv::Mat &imr,
 
     cv::Mat patch, target;
 
+    /*
+    以pt为中心，取一个winsize*winsize（整数）的patch，patch中每个像素值是插值得到的
+    */
     cv::getRectSubPix(iml, winsize, pt, patch);
 
     if( bgoleft ) {

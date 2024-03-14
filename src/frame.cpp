@@ -264,6 +264,10 @@ inline Keypoint Frame::computeKeypoint(const cv::Point2f &pt, const int lmid)
 
 
 // Add keypoint object to vector of kps
+/*
+从frame中添加keypoint
+关联的变量： mapkps/nb3dkps/nb2dkps/nbkps/vgridkps_/noccupcells_
+*/
 void Frame::addKeypoint(const Keypoint &kp)
 {
     std::lock_guard<std::mutex> lock(kps_mutex_);
@@ -331,6 +335,7 @@ void Frame::addKeypoint(const cv::Point2f &pt, const int lmid, const cv::Mat &de
     addKeypoint(kp);
 }
 
+// 输入pt，更新Frame中对应的keypt
 void Frame::updateKeypoint(const int lmid, const cv::Point2f &pt)
 {
     std::lock_guard<std::mutex> lock(kps_mutex_);
@@ -342,6 +347,7 @@ void Frame::updateKeypoint(const int lmid, const cv::Point2f &pt)
 
     Keypoint upkp = it->second;
 
+    // 更新kp的像素坐标后，stereo对应坐标也会发生变化，先把stereo关了
     if( upkp.is_stereo_ ) {
         nb_stereo_kps_--;
         upkp.is_stereo_ = false;
@@ -437,6 +443,10 @@ inline void Frame::removeKeypoint(const Keypoint &kp)
     removeKeypointById(kp.lmid_);
 }
 
+/*
+从frame中删除keypoint
+关联的变量： mapkps/nb3dkps/nb2dkps/nbkps/nb_stereo_kps/vgridkps_/noccupcells_
+*/
 void Frame::removeKeypointById(const int lmid)
 {
     std::lock_guard<std::mutex> lock(kps_mutex_);
@@ -591,6 +601,9 @@ int Frame::getKeypointCellIdx(const cv::Point2f &pt) const
     return (r * nbwcells_ + c);
 }
 
+/*
+找出 kp 所在cell 附近9个cell中的所有kps
+*/
 std::vector<Keypoint> Frame::getSurroundingKeypoints(const Keypoint &kp) const
 {
     std::vector<Keypoint> vkps;

@@ -35,6 +35,12 @@
 #include "map_manager.hpp"
 #include "feature_tracker.hpp"
 
+/*
+运动模型：
+updateMotionModel(Twc, time)：设置time时位姿Twc，并求速度log_rel_T
+applyMotionModel(Twc, time)：根据上一帧位姿与速度，输出time时位姿Twc
+reset：重置运动模型
+*/
 class MotionModel {
 
 public:
@@ -126,6 +132,7 @@ public:
     void resetFrame();
     void reset();
 
+    // 下面四个变量都是SlamManager中创建的对象（只构建一次，pcurframe/pmap数据会一直更新）
     std::shared_ptr<SlamParams> pslamstate_;
     std::shared_ptr<Frame> pcurframe_;
     std::shared_ptr<MapManager> pmap_;
